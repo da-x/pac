@@ -73,7 +73,7 @@ compilerInvokeEnv tmp_file cdir env stdparams = do
                           "-fno-diagnostics-color", "-iquote", BS.pack cdir]
   let str_params = BS.unwords params
   BS.putStrLn str_params
-  (code, stdout, stderr) <- readProcessWithExitCode "env" (env ++ ["LANG=en_US", "bash", "-c", BS.unpack str_params]) ""
+  (code, stdout, stderr) <- readProcessWithExitCode "env" (env ++ ["LC_ALL=C", "bash", "-c", BS.unpack str_params]) ""
   processResult tmp_file (code, stdout, stderr)
 
 compilerInvoke :: String -> String -> [BS.ByteString] -> IO CheckerResult
@@ -167,7 +167,7 @@ makefileChecker tmp_file orig_src_file = do
                  [ "check-syntax"
                  , "-C", dir
                  , "CHK_SOURCES=" ++ tmp_file
-                 , "LANG=en_US"
+                 , "LC_ALL=C"
                  , "QUOTE_INCLUDE_DIRS=" ++ (show (takeDirectory root))
                  ] ++ flags
 
