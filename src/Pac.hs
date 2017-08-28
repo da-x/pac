@@ -36,6 +36,10 @@ headRaise :: [a] -> IO a
 headRaise [] = E.throw (UnexpectedState "head failed")
 headRaise (x:_) = return x
 
+headMaybe :: [a] -> IO (Maybe a)
+headMaybe [] = return Nothing
+headMaybe (x:_) = return (Just x)
+
 processResult :: FilePath -> (t, String, String) -> IO CheckerResult
 processResult source_file (code, stdout, stderr) = do
   let rlines = BS.lines (BS.pack stderr)
@@ -79,6 +83,16 @@ compilerInvokeEnv tmp_file cdir env stdparams = do
 compilerInvoke :: String -> String -> [BS.ByteString] -> IO CheckerResult
 compilerInvoke tmp_file cdir stdparams = do
   compilerInvokeEnv tmp_file cdir [] stdparams
+
+upmostDirectoryToSatisify :: FilePath -> (FilePath -> IO Bool) -> IO (Maybe FilePath)
+upmostDirectoryToSatisify dir func = do
+   b <- func dir
+   upperRes <- if dir == "/" then return Nothing
+                             else upmostDirectoryToSatisify (takeDirectory dir) func
+   case upperRes of
+       Just dir -> return $ Just dir
+       Nothing -> return $ if b then Just dir else Nothing
+
 
 linuxChecker :: FilePath -> FilePath -> IO CheckerResult
 linuxChecker tmp_file orig_src_file = do
@@ -133,15 +147,27 @@ linuxChecker tmp_file orig_src_file = do
           then fmap BS.unpack $ BS.readFile ".kdir"
           else do
                 kconfig <- headRaise $ filter (BS.isSuffixOf "/include/linux/kconfig.h") filter_1
+
                 let orig_kdir_prefix = "-D__ORIG_KDIR__="
-                orig_kdir <- headRaise $ filter (orig_kdir_prefix `BS.isPrefixOf`) filter_1
-                return $
+                morig_kdir <- headMaybe $ filter (orig_kdir_prefix `BS.isPrefixOf`) filter_1
+                case morig_kdir of
+                    Just orig_kdir -> return $
                       if | not ("cmd_/" `BS.isPrefixOf` key) -> -- Internal kernel tree code!
                              (iterate takeDirectory orig_src_file) !! (length $ splitDirectories $ BS.unpack $ BS.drop 5 key)
                          | "/" `BS.isPrefixOf` kconfig ->
                              takeDirectory $ takeDirectory $ takeDirectory $ BS.unpack $ kconfig
                          | otherwise ->
                              BS.unpack $ BS.drop (BS.length orig_kdir_prefix) orig_kdir
+                    Nothing -> do
+                        m <- upmostDirectoryToSatisify cdir $ \dir -> do
+                            e1 <- doesFileExist $ dir ++ "/Makefile"
+                            e2 <- doesFileExist $ dir ++ "/Kbuild"
+                            e3 <- doesFileExist $ dir ++ "/Kconfig"
+                            e4 <- doesFileExist $ dir ++ "/README"
+                            return $ e1 && e2 && e3 && e4
+                        case m of
+                            Nothing -> E.throw (UnexpectedState "no kernel tree found")
+                            Just x -> return x
 
       setCurrentDirectory kernel_dir
       let fixslash x = BS.concat $ BL.toChunks $ replace "\\#" ("#" :: BL.ByteString) x
