@@ -101,9 +101,21 @@ linuxChecker tmp_file orig_src_file = do
   -- built Linux kernel trees, or external kernel modules to
   -- those trees.
   --
-  let dir = takeDirectory orig_src_file
-  cdir <- canonicalizePath dir
+  let src_dir = takeDirectory orig_src_file
+  cdir <- canonicalizePath src_dir
   tmp_file_canonized <- canonicalizePath tmp_file
+
+  let obj_dir_link = "/.git/obj-dir-link"
+  mgitdir <- upmostDirectoryToSatisify cdir $ \sdir -> do
+      doesFileExist $ sdir ++ obj_dir_link
+
+  (dir, mdir) <- case mgitdir of
+    Nothing -> return (src_dir, Nothing)
+    Just gitdir -> do
+        content <- BS.readFile $ gitdir ++ obj_dir_link
+        line <- headRaise $ BS.lines content
+        let subpath =  drop (length gitdir) cdir
+        return (BS.unpack line ++ subpath, Just line)
 
   -- Find the .*.o.cmd file
   let base = takeBaseName orig_src_file
@@ -159,15 +171,18 @@ linuxChecker tmp_file orig_src_file = do
                          | otherwise ->
                              BS.unpack $ BS.drop (BS.length orig_kdir_prefix) orig_kdir
                     Nothing -> do
-                        m <- upmostDirectoryToSatisify cdir $ \dir -> do
-                            e1 <- doesFileExist $ dir ++ "/Makefile"
-                            e2 <- doesFileExist $ dir ++ "/Kbuild"
-                            e3 <- doesFileExist $ dir ++ "/Kconfig"
-                            e4 <- doesFileExist $ dir ++ "/README"
-                            return $ e1 && e2 && e3 && e4
-                        case m of
-                            Nothing -> E.throw (UnexpectedState "no kernel tree found")
-                            Just x -> return x
+                        case mdir of
+                            Just mdir' -> return $ BS.unpack mdir'
+                            Nothing -> do
+                                m <- upmostDirectoryToSatisify cdir $ \dir -> do
+                                    e1 <- doesFileExist $ dir ++ "/Makefile"
+                                    e2 <- doesFileExist $ dir ++ "/Kbuild"
+                                    e3 <- doesFileExist $ dir ++ "/Kconfig"
+                                    e4 <- doesFileExist $ dir ++ "/README"
+                                    return $ e1 && e2 && e3 && e4
+                                case m of
+                                    Nothing -> E.throw (UnexpectedState "no kernel tree found")
+                                    Just x -> return x
 
       setCurrentDirectory kernel_dir
       let fixslash x = BS.concat $ BL.toChunks $ replace "\\#" ("#" :: BL.ByteString) x
