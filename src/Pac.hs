@@ -22,6 +22,7 @@ import           Text.Regex.TDFA        ((=~))
 import qualified Control.Exception      as E
 import           Data.Typeable               (Typeable)
 import qualified Data.List as DL
+import           Network.HostName       (getHostName)
 
 data CheckerResult =
   CheckerFound
@@ -95,8 +96,8 @@ upmostDirectoryToSatisify dir func = do
        Nothing -> return $ if b then Just dir else Nothing
 
 
-linuxChecker :: FilePath -> FilePath -> IO CheckerResult
-linuxChecker tmp_file orig_src_file = do
+fromGitConfig :: String -> FilePath -> IO (String, String, Maybe (BS.ByteString, String))
+fromGitConfig var_name orig_src_file = do
   --
   -- Checker able to deal with source files of configured and
   -- built Linux kernel trees, or external kernel modules to
@@ -104,18 +105,33 @@ linuxChecker tmp_file orig_src_file = do
   --
   let src_dir = takeDirectory orig_src_file
   cdir <- canonicalizePath src_dir
-  tmp_file_canonized <- canonicalizePath tmp_file
 
-  let obj_dir_link = "/.git/obj-dir-link"
+  let obj_dir_link = "/.git/" ++ var_name
   mgitdir <- upmostDirectoryToSatisify cdir $ \sdir -> do
       doesFileExist $ sdir ++ obj_dir_link
 
-  (dir, mdir) <- case mgitdir of
-    Nothing -> return (src_dir, Nothing)
+  case mgitdir of
+    Nothing ->
+        return (cdir, src_dir, Nothing)
     Just gitdir -> do
         content <- BS.readFile $ gitdir ++ obj_dir_link
         line <- headRaise $ BS.lines content
-        let subpath =  drop (length gitdir) cdir
+        return (cdir, src_dir, Just (line, gitdir))
+
+linuxChecker :: FilePath -> FilePath -> IO CheckerResult
+linuxChecker tmp_file orig_src_file = do
+  --
+  -- Checker able to deal with source files of configured and
+  -- built Linux kernel trees, or external kernel modules to
+  -- those trees.
+  --
+  tmp_file_canonized <- canonicalizePath tmp_file
+
+  (cdir, src_dir, varinfo) <- fromGitConfig "obj-dir-link" orig_src_file
+  (dir, mdir) <- case varinfo of
+    Nothing -> return (src_dir, Nothing)
+    Just (line, gitdir) -> do
+        let subpath = drop (length gitdir) cdir
         return (BS.unpack line ++ subpath, Just line)
 
   -- Find the .*.o.cmd file
@@ -249,7 +265,9 @@ mainIndirect f tmp_file orig_src_file =
            , ("makefile", makefileChecker)
            , ("standalone", standaloneChecker)
          ]
-     testCheckers checkers
+     redirected <- remoteChecker
+     when (not redirected) $ do
+         testCheckers checkers
   where testCheckers [] = return ()
         testCheckers ((name, checker):others) = do
           if f name then do
@@ -259,6 +277,27 @@ mainIndirect f tmp_file orig_src_file =
               CheckerFound -> return ()
             else
               testCheckers others
+        remoteChecker =
+            if tmp_file == orig_src_file
+                then do
+                    (_, _, varinfo) <- fromGitConfig "remote-pac" orig_src_file
+                    case varinfo of
+                        Nothing -> return False
+                        Just (line, _gitdir) -> do
+                            hostname <- fmap BS.pack $ getHostName
+                            if hostname /= line then do
+                                redirect line
+                                return True
+                              else
+                                return False
+                else return False
+        redirect hostname = do
+            putStrLn $ "Redirecting to another host - " ++ BS.unpack hostname
+            (code, stdout, stderr) <-
+                readProcessWithExitCode
+                   "ssh" ([BS.unpack hostname, "pac", "--direct", orig_src_file]) ""
+            putStr stdout
+            putStr stderr
 
 mainViaTmp :: (String -> Bool) -> FilePath -> IO ()
 mainViaTmp f src_file =

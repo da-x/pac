@@ -26,6 +26,7 @@ executable pac
                      , bytestring
                      , process
                      , stringsearch
+                     , hostname
                      , regex-tdfa
                      , regex-base
   hs-source-dirs:      src
