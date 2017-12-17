@@ -293,8 +293,16 @@ mainIndirect f tmp_file orig_src_file =
                 else return False
         redirect hostname = do
             putStrLn $ "Redirecting to another host - " ++ BS.unpack hostname
-            (code, stdout, stderr) <-
-                readProcessWithExitCode
+            pac_sync <- fromGitConfig "remote-pac-sync" orig_src_file
+            case pac_sync of
+                (_, _, Just (line, gitdir)) -> do
+                    putStrLn $ "Running custom sync script"
+                    (code, stdout, stderr) <- readProcessWithExitCode "bash"
+                        (["-c", "gitroot=\"" ++ gitdir ++ "\" ;" ++ BS.unpack line]) ""
+                    putStr stdout
+                    putStr stderr
+                _ -> return ()
+            (code, stdout, stderr) <- readProcessWithExitCode
                    "ssh" ([BS.unpack hostname, "pac", "--direct", orig_src_file]) ""
             putStr stdout
             putStr stderr
