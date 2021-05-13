@@ -18,6 +18,7 @@ import           System.FilePath        (replaceDirectory, splitDirectories,
                                          takeBaseName, takeDirectory, (</>))
 import           System.IO.Temp         (withSystemTempDirectory)
 import           System.Process         (readProcessWithExitCode)
+import           System.Exit            (ExitCode(ExitSuccess))
 import           Text.Regex.TDFA        ((=~))
 import qualified Control.Exception      as E
 import           Data.Typeable               (Typeable)
@@ -120,6 +121,13 @@ fromGitConfig var_name orig_src_file = do
 
 linuxChecker :: FilePath -> FilePath -> IO CheckerResult
 linuxChecker tmp_file orig_src_file = do
+  -- Per branch pac prefix
+  (code, stdout, stderr) <- readProcessWithExitCode "bash" ["-c",
+      "git config branch.$(git rev-parse --abbrev-ref HEAD).pac-prefix"] ""
+
+  prefix <- case code of
+     ExitSuccess -> return $ Just $ BS.pack $ takeWhile (/= '\n') stdout
+     _ -> return Nothing
   --
   -- Checker able to deal with source files of configured and
   -- built Linux kernel trees, or external kernel modules to
@@ -150,7 +158,10 @@ linuxChecker tmp_file orig_src_file = do
             (map (\x -> BS.take (BS.length x - 1) x) $ takeWhile ("\\" `BS.isSuffixOf`) flines) ++ [headFlines]
       let (key, val) = BS.breakSubstring " := " first_line
       let split = BS.split ' ' $ BS.drop 4 val
-      let filter_1 = filter (not . (BS.isPrefixOf "-Wp,")) split
+      let filter_0 = filter (not . (BS.isPrefixOf "-Wp,")) split
+      let filter_1 = case prefix of
+            Nothing -> filter_0
+            Just x -> x:filter_0
 
       -- Fixup for RH 7
       env <- if filter (== "/opt/rh/devtoolset-3/root/usr/lib/gcc/x86_64-redhat-linux/4.9.2/include") split /= [] then
